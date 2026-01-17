@@ -1,0 +1,110 @@
+name: Build gcld3 macOS (Intel) wheel for Python 3.14
+
+on:
+  workflow_dispatch:
+    inputs:
+      gcld3_version:
+        description: "gcld3 version to build"
+        required: true
+        default: "3.0.13"
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+        # Cache pip, bazel/bazelisk, ccache and Homebrew caches to speed repeated runs
+      - name: Restore build caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/Library/Caches/pip
+            ~/.cache/bazel
+            ~/.cache/bazelisk
+            ~/.ccache
+            ~/Library/Caches/Homebrew
+          key: cache-gcld3-${{ runner.os }}-{{ env.CacheKeyBase }}-${{ hashFiles('**/setup.py', '**/pyproject.toml', '**/requirements.txt') }}
+          restore-keys: |
+            cache-gcld3-${{ runner.os }}-{{ env.CacheKeyBase }}-
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          allow-prereleases: true  # remove once 3.14 is GA
+          cache: "pip"
+          cache-dependency-path: |
+            **/requirements.txt
+            **/setup.py
+            **/pyproject.toml
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install cibuildwheel==3.3.1
+          # use Homebrew for bazelisk/protobuf; Homebrew cache above will help on repeat runs
+          brew install bazelisk protobuf
+
+      - name: Download and unpack gcld3 sdist
+        run: |
+          mkdir -p /tmp/src
+          pip download gcld3==${{ inputs.gcld3_version }} --no-binary=:all: -d /tmp/src
+          SDIST=$(ls /tmp/src/gcld3-*.tar.gz | head -n1)
+          mkdir -p /tmp/pkg
+          tar -xzf "$SDIST" -C /tmp/pkg
+          SDIST_DIR=/tmp/pkg/$(basename "$SDIST" .tar.gz)
+          echo "SDIST_DIR=$SDIST_DIR" >> $GITHUB_ENV
+
+      - name: Patch gcld3 to build with C++17
+        run: |
+          cd "$SDIST_DIR"
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("setup.py")
+          p.write_text(p.read_text().replace("-std=c++11", "-std=c++17"))
+          PY
+
+      - name: Build wheel with cibuildwheel
+        env:
+          USE_BAZEL_VERSION: 5.4.0
+          CIBW_BUILD: cp314-macosx_x86_64
+          CIBW_ARCHS_MACOS: x86_64
+          CIBW_PRERELEASE_PYTHONS: 1
+          CIBW_BUILD_VERBOSITY: 1
+          CXXFLAGS: "-std=c++17"
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
+          # Speed: tell Bazel to reuse caches where possible
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+        run: |
+          cd "$SDIST_DIR"
+          python -m cibuildwheel --platform macos --output-dir /tmp/wheelhouse .
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcld3-wheels-${{ inputs.gcld3_version }}-py3.14-macosx_x86_64
+          path: /tmp/wheelhouse/*.whl
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download wheel
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create release and upload asset
+        uses: softprops/action-gh-release@v2.5.0
+        with:
+          tag_name: gcld3-wheel-macOS-intel-20261701
+          name: gcld3 macOS x86_64 wheel (Python 3.14)
+          draft: true
+          files: dist/**/*.whl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
