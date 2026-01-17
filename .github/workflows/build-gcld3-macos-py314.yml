@@ -15,31 +15,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-        # Cache pip, bazel/bazelisk, ccache and Homebrew caches to speed repeated runs
-      - name: Restore build caches
+        # Cache Homebrew packages to speed repeated runs
+      - name: Restore Homebrew cache
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/pip
-            ~/Library/Caches/pip
-            ~/.cache/bazel
-            ~/.cache/bazelisk
-            ~/.ccache
             ~/Library/Caches/Homebrew
-          key: cache-gcld3-${{ runner.os }}-{{ env.CacheKeyBase }}-${{ hashFiles('**/setup.py', '**/pyproject.toml', '**/requirements.txt') }}
+          key: cache-homebrew-${{ runner.os }}
           restore-keys: |
-            cache-gcld3-${{ runner.os }}-{{ env.CacheKeyBase }}-
+            cache-homebrew-${{ runner.os }}
+
+      - name: Cache gcld3 sdist
+        uses: actions/cache@v4
+        with:
+          path: /tmp/src
+          key: gcld3-sdist-${{ inputs.gcld3_version }}
 
       - name: Set up Python 3.14
         uses: actions/setup-python@v5
         with:
           python-version: "3.14"
           allow-prereleases: true  # remove once 3.14 is GA
-          cache: "pip"
-          cache-dependency-path: |
-            **/requirements.txt
-            **/setup.py
-            **/pyproject.toml
 
       - name: Install build tooling
         run: |
@@ -51,7 +47,10 @@ jobs:
       - name: Download and unpack gcld3 sdist
         run: |
           mkdir -p /tmp/src
-          pip download gcld3==${{ inputs.gcld3_version }} --no-binary=:all: -d /tmp/src
+          SDIST_FILE=/tmp/src/gcld3-${{ inputs.gcld3_version }}.tar.gz
+          if [ ! -f "$SDIST_FILE" ]; then
+            pip download gcld3==${{ inputs.gcld3_version }} --no-binary=:all: -d /tmp/src
+          fi
           SDIST=$(ls /tmp/src/gcld3-*.tar.gz | head -n1)
           mkdir -p /tmp/pkg
           tar -xzf "$SDIST" -C /tmp/pkg
